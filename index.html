@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EngVocabular</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,600;1,600&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📖</text></svg>">
+    <link rel="stylesheet" href="style.css">
+    <script src="dictionary.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1 class="logo">EngVocabular</h1>
+            <div class="stats" id="stats">
+                <span class="stat"><span class="stat-value" id="stat-known">0</span> изучено</span>
+                <span class="stat-divider"></span>
+                <span class="stat"><span class="stat-value" id="stat-remaining">0</span> осталось</span>
+                <span class="stat-divider"></span>
+                <span class="stat"><span class="stat-value" id="stat-total">0</span> всего</span>
+            </div>
+        </header>
+
+        <main>
+            <div class="card" id="card">
+                <div class="mode-badge" id="mode-badge">УЧИМ</div>
+                <div class="word-display" id="word-display">
+                    <div class="word-english" id="word-english">Загрузка...</div>
+                    <div class="word-russian hidden" id="word-russian"></div>
+                </div>
+                <div class="actions" id="actions">
+                    <button class="btn btn-know" id="btn-know">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        Знаю
+                    </button>
+                    <button class="btn btn-dontknow" id="btn-dontknow">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        Не знаю
+                    </button>
+                </div>
+                <div class="hint" id="hint">Нажми «Не знаю», чтобы увидеть перевод</div>
+            </div>
+
+            <div class="footer-links">
+                <button class="btn-link" id="btn-reset">Сбросить прогресс</button>
+                <span class="dot"></span>
+                <span id="word-count-info"></span>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const STORAGE_KEY = 'engvocabular_known';
+
+        function getKnownSet() {
+            try {
+                const stored = localStorage.getItem(STORAGE_KEY);
+                return stored ? new Set(JSON.parse(stored)) : new Set();
+            } catch {
+                return new Set();
+            }
+        }
+
+        function saveKnownSet(set) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]));
+        }
+
+        function getLearningWords() {
+            const known = getKnownSet();
+            return WORDS.filter((_, i) => !known.has(i));
+        }
+
+        function renderStats() {
+            const total = WORDS.length;
+            const known = getKnownSet().size;
+            const remaining = total - known;
+            document.getElementById('stat-known').textContent = known;
+            document.getElementById('stat-remaining').textContent = remaining;
+            document.getElementById('stat-total').textContent = total;
+            document.getElementById('word-count-info').textContent =
+                `${known} / ${total} изучено`;
+        }
+
+        let currentIndex = -1;
+        let translationShown = false;
+        let currentWord = null;
+
+        function loadNext() {
+            const learning = getLearningWords();
+            if (learning.length === 0) {
+                document.getElementById('word-english').textContent = 'Поздравляю! Все слова изучены!';
+                document.getElementById('word-russian').classList.add('hidden');
+                document.getElementById('actions').classList.add('hidden');
+                document.getElementById('hint').classList.add('hidden');
+                document.getElementById('mode-badge').textContent = 'ГОТОВО';
+                currentWord = null;
+                return;
+            }
+            const randomWord = learning[Math.floor(Math.random() * learning.length)];
+            currentWord = randomWord;
+            translationShown = false;
+            document.getElementById('word-english').textContent = randomWord[0];
+            document.getElementById('word-russian').textContent = randomWord[1];
+            document.getElementById('word-russian').classList.add('hidden');
+            document.getElementById('actions').classList.remove('hidden');
+            document.getElementById('hint').classList.remove('hidden');
+            document.getElementById('mode-badge').textContent = 'УЧИМ';
+        }
+
+        document.getElementById('btn-know').addEventListener('click', () => {
+            if (!currentWord) return;
+            const idx = WORDS.indexOf(currentWord);
+            if (idx !== -1) {
+                const known = getKnownSet();
+                known.add(idx);
+                saveKnownSet(known);
+                renderStats();
+            }
+            loadNext();
+        });
+
+        document.getElementById('btn-dontknow').addEventListener('click', () => {
+            if (!currentWord) return;
+            if (!translationShown) {
+                document.getElementById('word-russian').classList.remove('hidden');
+                document.getElementById('hint').classList.add('hidden');
+                document.getElementById('mode-badge').textContent = 'ПЕРЕВОД';
+                translationShown = true;
+                return;
+            }
+            loadNext();
+        });
+
+        document.getElementById('btn-reset').addEventListener('click', () => {
+            if (!confirm('Сбросить весь прогресс? Все слова будут как новые.')) return;
+            localStorage.removeItem(STORAGE_KEY);
+            renderStats();
+            loadNext();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === 'k' || e.key === 'K') {
+                document.getElementById('btn-know').click();
+            } else if (e.key === 'ArrowLeft' || e.key === 'n' || e.key === 'N') {
+                document.getElementById('btn-dontknow').click();
+            }
+        });
+
+        renderStats();
+        loadNext();
+    </script>
+</body>
+</html>
