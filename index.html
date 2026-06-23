@@ -28,7 +28,16 @@
             <div class="card" id="card">
                 <div class="mode-badge" id="mode-badge">УЧИМ</div>
                 <div class="word-display" id="word-display">
-                    <div class="word-english" id="word-english">Загрузка...</div>
+                    <div class="word-row">
+                        <div class="word-english" id="word-english">Загрузка...</div>
+                        <button class="btn-speak" id="btn-speak" title="Прослушать произношение">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                            </svg>
+                        </button>
+                    </div>
                     <div class="word-russian hidden" id="word-russian"></div>
                 </div>
                 <div class="actions" id="actions">
@@ -41,7 +50,7 @@
                         Не знаю
                     </button>
                 </div>
-                <div class="hint" id="hint">Нажми «Не знаю», чтобы увидеть перевод</div>
+                <div class="hint" id="hint">«Не знаю» — перевод &nbsp;·&nbsp; 🔊 S — произношение</div>
             </div>
 
             <div class="footer-links">
@@ -110,6 +119,38 @@
             document.getElementById('mode-badge').textContent = 'УЧИМ';
         }
 
+        let voicesLoaded = false;
+        let bestVoice = null;
+
+        function initVoice() {
+            const voices = speechSynthesis.getVoices();
+            bestVoice = voices.find(v => v.lang.startsWith('en-US') && /samantha|ava|female/i.test(v.name))
+                     || voices.find(v => v.lang.startsWith('en-US'))
+                     || voices.find(v => v.lang.startsWith('en'));
+            voicesLoaded = true;
+        }
+        initVoice();
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = initVoice;
+        }
+
+        function speak(word) {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(word);
+            utterance.lang = 'en-US';
+            utterance.rate = 0.85;
+            if (bestVoice) utterance.voice = bestVoice;
+            const btn = document.getElementById('btn-speak');
+            btn.classList.add('speaking');
+            utterance.onend = () => btn.classList.remove('speaking');
+            utterance.onerror = () => btn.classList.remove('speaking');
+            window.speechSynthesis.speak(utterance);
+        }
+
+        document.getElementById('btn-speak').addEventListener('click', () => {
+            if (currentWord) speak(currentWord[0]);
+        });
+
         document.getElementById('btn-know').addEventListener('click', () => {
             if (!currentWord) return;
             const idx = WORDS.indexOf(currentWord);
@@ -146,6 +187,9 @@
                 document.getElementById('btn-know').click();
             } else if (e.key === 'ArrowLeft' || e.key === 'n' || e.key === 'N') {
                 document.getElementById('btn-dontknow').click();
+            } else if (e.key === 's' || e.key === 'S' || e.key === ' ') {
+                e.preventDefault();
+                document.getElementById('btn-speak').click();
             }
         });
 

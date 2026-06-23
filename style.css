@@ -98,12 +98,55 @@ header {
     gap: 8px;
 }
 
+.word-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+}
+
 .word-english {
     font-size: 40px;
     font-weight: 600;
     color: #ffffff;
     letter-spacing: -0.5px;
     line-height: 1.2;
+}
+
+.btn-speak {
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: #8b8b9e;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.btn-speak:hover {
+    background: rgba(129, 140, 248, 0.15);
+    border-color: rgba(129, 140, 248, 0.3);
+    color: #818cf8;
+    transform: scale(1.05);
+}
+
+.btn-speak:active {
+    transform: scale(0.95);
+}
+
+.btn-speak.speaking {
+    color: #818cf8;
+    animation: pulse-glow 0.6s ease infinite;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0.3); }
+    50% { box-shadow: 0 0 0 8px rgba(129, 140, 248, 0); }
 }
 
 .word-russian {
