@@ -309,34 +309,16 @@
             overlay.classList.add('hidden');
         }
 
-        // On first show, decide mode
         function initSettingsUI() {
-            const repoKnown = detectRepo();
+            detectRepo();
             if (nickname && githubToken) {
-                // Already fully configured — hide settings
                 hideSettings();
                 updateNicknameUI();
                 syncFromGitHub();
                 return;
             }
-            if (repoKnown && !githubToken && nickname) {
-                // Repo known, user known by nickname, but no token locally
-                // Try to load config from repo
-                showSettings();
-                switchToLoginMode();
-                return;
-            }
-            if (repoKnown) {
-                // Repo known, no config at all
-                showSettings();
-                switchToSetupMode();
-                ownerInput.value = repoOwner;
-                repoInput.value = repoName;
-                return;
-            }
-            // No repo known — full setup
-            showSettings();
-            switchToSetupMode();
+            hideSettings();
+            updateNicknameUI();
         }
 
         settingsBtn.addEventListener('click', async () => {
@@ -427,12 +409,23 @@
             hideSettings();
         });
 
-        document.getElementById('btn-settings').addEventListener('click', () => {
+        document.getElementById('btn-settings').addEventListener('click', async () => {
             settingsHint.textContent = '';
             nicknameInput.value = nickname;
             tokenInput.value = githubToken;
             ownerInput.value = repoOwner;
             repoInput.value = repoName;
+
+            detectRepo();
+            if (repoOwner && repoName && !githubToken) {
+                settingsHint.textContent = 'Проверяем репозиторий...';
+                const config = await loadConfigFromRepo();
+                if (config) {
+                    switchToLoginMode();
+                    showSettings();
+                    return;
+                }
+            }
             switchToSetupMode();
             showSettings();
         });
