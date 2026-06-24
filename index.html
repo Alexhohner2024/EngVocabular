@@ -12,6 +12,19 @@
     <script src="dictionary.js"></script>
 </head>
 <body>
+    <div class="login-overlay hidden" id="settings-overlay">
+        <div class="login-modal">
+            <h1 class="logo">EngVocabular</h1>
+            <p id="settings-desc">Настройте синхронизацию</p>
+            <input type="text" class="login-input" id="nickname-input" placeholder="Ваш никнейм" maxlength="30" autocomplete="off">
+            <input type="password" class="login-input" id="token-input" placeholder="GitHub Personal Access Token" autocomplete="off">
+            <input type="text" class="login-input" id="owner-input" placeholder="Владелец репозитория (username)">
+            <input type="text" class="login-input" id="repo-input" placeholder="Название репозитория">
+            <button class="login-btn" id="settings-btn">Сохранить</button>
+            <p class="settings-hint" id="settings-hint"></p>
+        </div>
+    </div>
+
     <div class="container">
         <header>
             <h1 class="logo">EngVocabular</h1>
@@ -57,31 +70,373 @@
                 <button class="btn-link" id="btn-reset">Сбросить прогресс</button>
                 <span class="dot"></span>
                 <span id="word-count-info"></span>
+                <span class="dot" id="dot-nickname"></span>
+                <span id="nickname-display"></span>
+                <button class="btn-link" id="btn-settings">Настройки</button>
             </div>
         </main>
     </div>
 
     <script>
-        const STORAGE_KEY = 'engvocabular_known';
+        // =========================================================
+        //  СИНХРОНИЗАЦИЯ ЧЕРЕЗ GITHUB API
+        //
+        //  Прогресс:         data/progress.json
+        //  Зашифрованный токен: data/config.json (ключ = ваш никнейм)
+        //
+        //  На первом устройстве: вводите никнейм + токен
+        //  Токен шифруется никнеймом и сохраняется в config.json
+        //  На новом устройстве: вводите только никнейм
+        //  Токен расшифровывается из config.json
+        // =========================================================
 
+        const STORAGE_KEY = 'engvocabular_known';
+        const SETTINGS_KEY = 'engvocabular_settings';
+        const CONFIG_PATH = 'data/config.json';
+        const PROGRESS_PATH = 'data/progress.json';
+        const GITHUB_API = 'https://api.github.com';
+
+        // === Crypto helpers ===
+        function buf2b64(buf) {
+            return btoa(String.fromCharCode(...new Uint8Array(buf)));
+        }
+        function b642buf(s) {
+            return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+        }
+        async function deriveKey(password, salt) {
+            const keyMaterial = await crypto.subtle.importKey(
+                'raw', new TextEncoder().encode(password),
+                'PBKDF2', false, ['deriveKey']
+            );
+            return crypto.subtle.deriveKey(
+                { name: 'PBKDF2', salt, iterations: 200000, hash: 'SHA-256' },
+                keyMaterial,
+                { name: 'AES-GCM', length: 256 },
+                false, ['encrypt', 'decrypt']
+            );
+        }
+        async function encryptToken(token, password) {
+            const salt = crypto.getRandomValues(new Uint8Array(16));
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const key = await deriveKey(password, salt);
+            const enc = await crypto.subtle.encrypt(
+                { name: 'AES-GCM', iv }, key,
+                new TextEncoder().encode(token)
+            );
+            return { encrypted: buf2b64(enc), salt: buf2b64(salt), iv: buf2b64(iv) };
+        }
+        async function decryptToken(payload, password) {
+            const key = await deriveKey(password, b642buf(payload.salt));
+            const dec = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: b642buf(payload.iv) }, key,
+                b642buf(payload.encrypted)
+            );
+            return new TextDecoder().decode(dec);
+        }
+
+        // === Settings ===
+        function loadSettings() {
+            try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; }
+            catch { return {}; }
+        }
+        function saveSettings(s) {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+        }
+
+        let settings = loadSettings();
+        let nickname = settings.nickname || '';
+        let githubToken = settings.token || '';
+        let repoOwner = settings.owner || '';
+        let repoName = settings.repo || '';
+
+        // === Auto-detect repo from URL ===
+        function detectRepo() {
+            if (repoOwner && repoName) return true;
+            try {
+                const url = new URL(window.location.href);
+                if (url.hostname.endsWith('github.io')) {
+                    const parts = url.pathname.split('/').filter(Boolean);
+                    if (parts.length > 0) {
+                        repoOwner = url.hostname.split('.')[0];
+                        repoName = parts[0];
+                        saveSettings({ nickname, token: githubToken, owner: repoOwner, repo: repoName });
+                        return true;
+                    }
+                }
+            } catch {}
+            return false;
+        }
+
+        // === Known set helpers ===
         function getKnownSet() {
             try {
                 const stored = localStorage.getItem(STORAGE_KEY);
                 return stored ? new Set(JSON.parse(stored)) : new Set();
-            } catch {
-                return new Set();
-            }
+            } catch { return new Set(); }
         }
-
         function saveKnownSet(set) {
             localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]));
         }
 
+        // === GitHub API ===
+        // Read public file via raw URL (no auth needed)
+        async function ghRead(path) {
+            const url = `https://raw.githubusercontent.com/${repoOwner}/${repoName}/main/${path}`;
+            try {
+                const res = await fetch(url);
+                if (!res.ok) return null;
+                return await res.json();
+            } catch { return null; }
+        }
+        // Get file info + sha from API (needed for writing)
+        async function ghMeta(path) {
+            const url = `${GITHUB_API}/repos/${repoOwner}/${repoName}/contents/${path}`;
+            try {
+                const res = await fetch(url, {
+                    headers: { Accept: 'application/vnd.github.v3+json' }
+                });
+                if (res.status === 404) return null;
+                if (!res.ok) return null;
+                const json = await res.json();
+                return { sha: json.sha, data: JSON.parse(atob(json.content)) };
+            } catch { return null; }
+        }
+        // Write file via API (needs token)
+        async function ghWrite(path, data, sha) {
+            const url = `${GITHUB_API}/repos/${repoOwner}/${repoName}/contents/${path}`;
+            const body = {
+                message: `update ${path}`,
+                content: btoa(JSON.stringify(data)),
+                branch: 'main'
+            };
+            if (sha) body.sha = sha;
+            try {
+                const res = await fetch(url, {
+                    method: 'PUT',
+                    headers: {
+                        Authorization: `token ${githubToken}`,
+                        Accept: 'application/vnd.github.v3+json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(body)
+                });
+                return res.ok;
+            } catch { return false; }
+        }
+
+        // === Config (encrypted token) ===
+        async function loadConfigFromRepo() {
+            return ghRead(CONFIG_PATH);
+        }
+        async function saveConfigToRepo(payload) {
+            const existing = await ghMeta(CONFIG_PATH);
+            const sha = existing ? existing.sha : null;
+            return ghWrite(CONFIG_PATH, payload, sha);
+        }
+
+        // === Progress sync ===
+        async function fetchProgress() {
+            if (!repoOwner || !repoName) return null;
+            return ghRead(PROGRESS_PATH);
+        }
+        async function saveProgressToGitHub(set) {
+            if (!repoOwner || !repoName || !nickname) return;
+            const existing = await ghMeta(PROGRESS_PATH);
+            const data = existing ? existing.data : {};
+            data[nickname] = [...set];
+            await ghWrite(PROGRESS_PATH, data, existing ? existing.sha : null);
+        }
+        async function syncFromGitHub() {
+            if (!repoOwner || !repoName || !nickname) return;
+            const data = await fetchProgress();
+            if (!data) return;
+            const serverIndices = new Set((data[nickname] || []));
+            const localSet = getKnownSet();
+            const merged = new Set([...localSet, ...serverIndices]);
+            if (merged.size !== localSet.size) {
+                saveKnownSet(merged);
+                renderStats();
+                loadNext();
+            }
+            if (merged.size > serverIndices.size) {
+                await saveProgressToGitHub(merged);
+            }
+        }
+
+        // === Settings UI ===
+        const overlay = document.getElementById('settings-overlay');
+        const nicknameInput = document.getElementById('nickname-input');
+        const tokenInput = document.getElementById('token-input');
+        const ownerInput = document.getElementById('owner-input');
+        const repoInput = document.getElementById('repo-input');
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsDesc = document.getElementById('settings-desc');
+        const settingsHint = document.getElementById('settings-hint');
+
+        let settingsMode = 'setup';
+
+        function switchToLoginMode() {
+            settingsMode = 'login';
+            settingsDesc.textContent = 'Введите ваш никнейм, чтобы войти';
+            tokenInput.classList.add('hidden');
+            ownerInput.classList.add('hidden');
+            repoInput.classList.add('hidden');
+            settingsBtn.textContent = 'Войти';
+            settingsHint.textContent = '';
+        }
+
+        function switchToSetupMode() {
+            settingsMode = 'setup';
+            settingsDesc.textContent = 'Настройте синхронизацию через GitHub';
+            tokenInput.classList.remove('hidden');
+            ownerInput.classList.remove('hidden');
+            repoInput.classList.remove('hidden');
+            settingsBtn.textContent = 'Сохранить';
+            settingsHint.textContent = '';
+        }
+
+        function showSettings(message) {
+            overlay.classList.remove('hidden');
+            nicknameInput.value = nickname;
+            tokenInput.value = githubToken;
+            ownerInput.value = repoOwner;
+            repoInput.value = repoName;
+            if (message) settingsHint.textContent = message;
+            nicknameInput.focus();
+        }
+        function hideSettings() {
+            overlay.classList.add('hidden');
+        }
+
+        // On first show, decide mode
+        function initSettingsUI() {
+            const repoKnown = detectRepo();
+            if (nickname && githubToken) {
+                // Already fully configured — hide settings
+                hideSettings();
+                updateNicknameUI();
+                syncFromGitHub();
+                return;
+            }
+            if (repoKnown && !githubToken && nickname) {
+                // Repo known, user known by nickname, but no token locally
+                // Try to load config from repo
+                showSettings();
+                switchToLoginMode();
+                return;
+            }
+            if (repoKnown) {
+                // Repo known, no config at all
+                showSettings();
+                switchToSetupMode();
+                ownerInput.value = repoOwner;
+                repoInput.value = repoName;
+                return;
+            }
+            // No repo known — full setup
+            showSettings();
+            switchToSetupMode();
+        }
+
+        settingsBtn.addEventListener('click', async () => {
+            const val = nicknameInput.value.trim();
+            if (!val) return;
+
+            if (settingsMode === 'login') {
+                // Login mode: only nickname needed, decrypt token from config.json
+                settingsHint.textContent = 'Загружаем данные...';
+                const config = await loadConfigFromRepo();
+                if (!config) {
+                    settingsHint.textContent = 'Ошибка: файл config.json не найден в репозитории. Сначала настройте синхронизацию с этого же устройства.';
+                    return;
+                }
+                let token;
+                try {
+                    token = await decryptToken(config, val);
+                } catch {
+                    settingsHint.textContent = 'Ошибка: неверный никнейм.';
+                    return;
+                }
+                nickname = val;
+                githubToken = token;
+                saveSettings({ nickname, token: githubToken, owner: repoOwner, repo: repoName });
+                hideSettings();
+                updateNicknameUI();
+                syncFromGitHub();
+                return;
+            }
+
+            // Setup mode: full settings
+            const token = tokenInput.value.trim();
+            let owner = ownerInput.value.trim() || repoOwner;
+            let repo = repoInput.value.trim() || repoName;
+            if (!token || !owner || !repo) return;
+
+            nickname = val;
+            githubToken = token;
+            repoOwner = owner;
+            repoName = repo;
+            saveSettings({ nickname, token: githubToken, owner: repoOwner, repo: repoName });
+
+            // Encrypt and save config to repo
+            settingsHint.textContent = 'Сохраняем настройки в репозиторий...';
+            const payload = await encryptToken(githubToken, nickname);
+            const saved = await saveConfigToRepo(payload);
+            if (!saved) {
+                settingsHint.textContent = 'Ошибка: не удалось сохранить config.json. Проверьте токен и название репозитория.';
+                return;
+            }
+
+            hideSettings();
+            updateNicknameUI();
+            syncFromGitHub();
+        });
+
+        tokenInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && settingsMode === 'setup') settingsBtn.click();
+        });
+        nicknameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                if (settingsMode === 'login') settingsBtn.click();
+                else tokenInput.focus();
+            }
+        });
+        ownerInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') repoInput.focus();
+        });
+        repoInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && settingsMode === 'setup') settingsBtn.click();
+        });
+
+        document.getElementById('btn-settings').addEventListener('click', () => {
+            if (nickname && githubToken) {
+                nicknameInput.value = nickname;
+                tokenInput.value = githubToken;
+                ownerInput.value = repoOwner;
+                repoInput.value = repoName;
+            }
+            switchToSetupMode();
+            showSettings();
+        });
+
+        function updateNicknameUI() {
+            const display = document.getElementById('nickname-display');
+            const dot = document.getElementById('dot-nickname');
+            if (nickname && githubToken && repoOwner && repoName) {
+                display.textContent = nickname;
+                display.classList.remove('hidden');
+                dot.classList.remove('hidden');
+            } else {
+                display.classList.add('hidden');
+                dot.classList.add('hidden');
+            }
+        }
+
+        // === Word display logic ===
         function getLearningWords() {
             const known = getKnownSet();
             return WORDS.filter((_, i) => !known.has(i));
         }
-
         function renderStats() {
             const total = WORDS.length;
             const known = getKnownSet().size;
@@ -89,11 +444,9 @@
             document.getElementById('stat-known').textContent = known;
             document.getElementById('stat-remaining').textContent = remaining;
             document.getElementById('stat-total').textContent = total;
-            document.getElementById('word-count-info').textContent =
-                `${known} / ${total} изучено`;
+            document.getElementById('word-count-info').textContent = `${known} / ${total} изучено`;
         }
 
-        let currentIndex = -1;
         let translationShown = false;
         let currentWord = null;
 
@@ -119,21 +472,17 @@
             document.getElementById('mode-badge').textContent = 'УЧИМ';
         }
 
-        let voicesLoaded = false;
         let bestVoice = null;
-
         function initVoice() {
             const voices = speechSynthesis.getVoices();
             bestVoice = voices.find(v => v.lang.startsWith('en-US') && /samantha|ava|female/i.test(v.name))
                      || voices.find(v => v.lang.startsWith('en-US'))
                      || voices.find(v => v.lang.startsWith('en'));
-            voicesLoaded = true;
         }
         initVoice();
         if (speechSynthesis.onvoiceschanged !== undefined) {
             speechSynthesis.onvoiceschanged = initVoice;
         }
-
         function speak(word) {
             window.speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(word);
@@ -150,8 +499,7 @@
         document.getElementById('btn-speak').addEventListener('click', () => {
             if (currentWord) speak(currentWord[0]);
         });
-
-        document.getElementById('btn-know').addEventListener('click', () => {
+        document.getElementById('btn-know').addEventListener('click', async () => {
             if (!currentWord) return;
             const idx = WORDS.indexOf(currentWord);
             if (idx !== -1) {
@@ -159,10 +507,10 @@
                 known.add(idx);
                 saveKnownSet(known);
                 renderStats();
+                if (githubToken && nickname) await saveProgressToGitHub(known);
             }
             loadNext();
         });
-
         document.getElementById('btn-dontknow').addEventListener('click', () => {
             if (!currentWord) return;
             if (!translationShown) {
@@ -174,14 +522,15 @@
             }
             loadNext();
         });
-
-        document.getElementById('btn-reset').addEventListener('click', () => {
+        document.getElementById('btn-reset').addEventListener('click', async () => {
             if (!confirm('Сбросить весь прогресс? Все слова будут как новые.')) return;
             localStorage.removeItem(STORAGE_KEY);
+            if (nickname && repoOwner && repoName) {
+                await saveProgressToGitHub([]);
+            }
             renderStats();
             loadNext();
         });
-
         document.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowRight' || e.key === 'k' || e.key === 'K') {
                 document.getElementById('btn-know').click();
@@ -195,6 +544,7 @@
 
         renderStats();
         loadNext();
+        initSettingsUI();
     </script>
 </body>
 </html>
