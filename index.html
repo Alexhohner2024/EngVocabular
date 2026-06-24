@@ -21,6 +21,7 @@
             <input type="text" class="login-input" id="owner-input" placeholder="Владелец репозитория (username)">
             <input type="text" class="login-input" id="repo-input" placeholder="Название репозитория">
             <button class="login-btn" id="settings-btn">Сохранить</button>
+            <button class="login-btn login-btn-secondary" id="settings-cancel-btn">Отмена</button>
             <p class="settings-hint" id="settings-hint"></p>
         </div>
     </div>
@@ -372,19 +373,32 @@
             let repo = repoInput.value.trim() || repoName;
             if (!token || !owner || !repo) return;
 
+            // Check if anything actually changed
+            const sameNick = val === nickname;
+            const sameToken = token === githubToken;
+            const sameOwner = owner === repoOwner;
+            const sameRepo = repo === repoName;
+
+            if (sameNick && sameToken && sameOwner && sameRepo) {
+                hideSettings();
+                return;
+            }
+
             nickname = val;
             githubToken = token;
             repoOwner = owner;
             repoName = repo;
             saveSettings({ nickname, token: githubToken, owner: repoOwner, repo: repoName });
 
-            // Encrypt and save config to repo
-            settingsHint.textContent = 'Сохраняем настройки в репозиторий...';
-            const payload = await encryptToken(githubToken, nickname);
-            const saved = await saveConfigToRepo(payload);
-            if (!saved) {
-                settingsHint.textContent = 'Ошибка: не удалось сохранить config.json. Проверьте токен и название репозитория.';
-                return;
+            // If token or nickname changed, re-encrypt and save config to repo
+            if (!sameToken || !sameNick) {
+                settingsHint.textContent = 'Сохраняем настройки в репозиторий...';
+                const payload = await encryptToken(githubToken, nickname);
+                const saved = await saveConfigToRepo(payload);
+                if (!saved) {
+                    settingsHint.textContent = 'Ошибка: не удалось сохранить config.json. Проверьте токен и название репозитория.';
+                    return;
+                }
             }
 
             hideSettings();
@@ -408,13 +422,17 @@
             if (e.key === 'Enter' && settingsMode === 'setup') settingsBtn.click();
         });
 
+        document.getElementById('settings-cancel-btn').addEventListener('click', () => {
+            settingsHint.textContent = '';
+            hideSettings();
+        });
+
         document.getElementById('btn-settings').addEventListener('click', () => {
-            if (nickname && githubToken) {
-                nicknameInput.value = nickname;
-                tokenInput.value = githubToken;
-                ownerInput.value = repoOwner;
-                repoInput.value = repoName;
-            }
+            settingsHint.textContent = '';
+            nicknameInput.value = nickname;
+            tokenInput.value = githubToken;
+            ownerInput.value = repoOwner;
+            repoInput.value = repoName;
             switchToSetupMode();
             showSettings();
         });

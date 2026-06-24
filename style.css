@@ -365,6 +365,20 @@ header {
     line-height: 1.4;
 }
 
+.login-btn-secondary {
+    margin-top: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #8b8b9e;
+    font-weight: 500;
+}
+
+.login-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: none;
+    box-shadow: none;
+}
+
 @media (max-width: 480px) {
     .container { padding: 16px; }
     .card { padding: 28px 20px; }
