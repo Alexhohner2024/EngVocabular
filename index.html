@@ -52,6 +52,7 @@
                             </svg>
                         </button>
                     </div>
+                    <div class="word-pos" id="word-pos"></div>
                     <div class="word-russian hidden" id="word-russian"></div>
                 </div>
                 <div class="actions" id="actions">
@@ -71,6 +72,7 @@
                 <button class="btn-link" id="btn-reset">Сбросить прогресс</button>
                 <span class="dot"></span>
                 <span id="word-count-info"></span>
+                <span id="sync-status" aria-live="polite"></span>
                 <span class="dot" id="dot-nickname"></span>
                 <span id="nickname-display"></span>
                 <button class="btn-link" id="btn-settings">Настройки</button>
@@ -103,6 +105,14 @@
         }
         function b642buf(s) {
             return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+        }
+        function utf8ToB64(value) {
+            const bytes = new TextEncoder().encode(value);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) {
+                binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            }
+            return btoa(binary);
         }
         async function deriveKey(password, salt) {
             const keyMaterial = await crypto.subtle.importKey(
@@ -207,7 +217,7 @@
             const url = `${GITHUB_API}/repos/${repoOwner}/${repoName}/contents/${path}`;
             const body = {
                 message: `update ${path}`,
-                content: btoa(JSON.stringify(data)),
+                content: utf8ToB64(JSON.stringify(data)),
                 branch: 'main'
             };
             if (sha) body.sha = sha;
@@ -221,8 +231,16 @@
                     },
                     body: JSON.stringify(body)
                 });
-                return res.ok;
-            } catch { return false; }
+                if (res.ok) return { ok: true };
+                let detail = `HTTP ${res.status}`;
+                try {
+                    const error = await res.json();
+                    if (error.message) detail += `: ${error.message}`;
+                } catch {}
+                return { ok: false, detail };
+            } catch (error) {
+                return { ok: false, detail: error.message || 'ошибка сети' };
+            }
         }
 
         // === Config (encrypted token) ===
@@ -232,7 +250,9 @@
         async function saveConfigToRepo(payload) {
             const existing = await ghMeta(CONFIG_PATH);
             const sha = existing ? existing.sha : null;
-            return ghWrite(CONFIG_PATH, payload, sha);
+            const result = await ghWrite(CONFIG_PATH, payload, sha);
+            if (!result.ok) console.error('Не удалось сохранить конфигурацию:', result.detail);
+            return result.ok;
         }
 
         // === Progress sync ===
@@ -245,7 +265,17 @@
             const existing = await ghMeta(PROGRESS_PATH);
             const data = existing ? existing.data : {};
             data[nickname] = [...set];
-            await ghWrite(PROGRESS_PATH, data, existing ? existing.sha : null);
+            const result = await ghWrite(PROGRESS_PATH, data, existing ? existing.sha : null);
+            const status = document.getElementById('sync-status');
+            if (result.ok) {
+                status.textContent = 'сохранено';
+                status.className = 'sync-ok';
+            } else {
+                status.textContent = `ошибка синхронизации (${result.detail})`;
+                status.className = 'sync-error';
+                console.error('Не удалось сохранить прогресс:', result.detail);
+            }
+            return result.ok;
         }
         async function syncFromGitHub() {
             if (!repoOwner || !repoName || !nickname) return;
@@ -458,6 +488,20 @@
             document.getElementById('word-count-info').textContent = `${known} / ${total} изучено`;
         }
 
+        function pickLearningWord(words) {
+            const totalWeight = words.reduce((sum, word) => {
+                const isVerb = word[2] === 'глагол' || word[2] === 'модальный глагол';
+                return sum + (isVerb ? 2 : 1);
+            }, 0);
+            let cursor = Math.random() * totalWeight;
+            for (const word of words) {
+                const isVerb = word[2] === 'глагол' || word[2] === 'модальный глагол';
+                cursor -= isVerb ? 2 : 1;
+                if (cursor < 0) return word;
+            }
+            return words[words.length - 1];
+        }
+
         let translationShown = false;
         let currentWord = null;
 
@@ -465,6 +509,7 @@
             const learning = getLearningWords();
             if (learning.length === 0) {
                 document.getElementById('word-english').textContent = 'Поздравляю! Все слова изучены!';
+                document.getElementById('word-pos').textContent = '';
                 document.getElementById('word-russian').classList.add('hidden');
                 document.getElementById('actions').classList.add('hidden');
                 document.getElementById('hint').classList.add('hidden');
@@ -472,10 +517,11 @@
                 currentWord = null;
                 return;
             }
-            const randomWord = learning[Math.floor(Math.random() * learning.length)];
+            const randomWord = pickLearningWord(learning);
             currentWord = randomWord;
             translationShown = false;
             document.getElementById('word-english').textContent = randomWord[0];
+            document.getElementById('word-pos').textContent = randomWord[2] || '';
             document.getElementById('word-russian').textContent = randomWord[1];
             document.getElementById('word-russian').classList.add('hidden');
             document.getElementById('actions').classList.remove('hidden');
